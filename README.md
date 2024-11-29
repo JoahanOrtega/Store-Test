@@ -18,7 +18,6 @@ Este proyecto proporciona una API RESTful desarrollada con Flask para gestionar 
 **Descripción:** Crea un nuevo usuario en el sistema.  
 
 **Cuerpo de la solicitud (JSON):**
-```json
 {
     "username": "john_doe",
     "email": "john@example.com",
