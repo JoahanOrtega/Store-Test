@@ -29,13 +29,14 @@ Respuesta esperada:
     Código 201: Usuario creado exitosamente.
     Código 400: Error en los datos proporcionados.
 
-Categorías
-Crear una categoría
+## Usuarios
 
-URL: POST /api/categories
-Descripción: Agrega una nueva categoría de productos.
+### Crear una categoría
 
-Cuerpo de la solicitud (JSON):
+**URL:** `POST /api/categories`
+**Descripción:** Agrega una nueva categoría de productos.
+
+**Cuerpo de la solicitud (JSON):**
 
 {
     "name": "Electronics",
@@ -47,13 +48,13 @@ Respuesta esperada:
     Código 201: Categoría creada exitosamente.
     Código 400: Error en los datos proporcionados.
 
-Productos
-Crear un producto
+## Productos
+### Crear un producto
 
-URL: POST /api/products
-Descripción: Agrega un nuevo producto a una categoría existente.
+**URL:** `POST /api/products`
+**Descripción:** Agrega un nuevo producto a una categoría existente.
 
-Cuerpo de la solicitud (JSON):
+**Cuerpo de la solicitud (JSON):**
 
 {
     "name": "Smartphone",
@@ -68,13 +69,13 @@ Respuesta esperada:
     Código 201: Producto creado exitosamente.
     Código 400: Error en los datos proporcionados.
 
-Carrito
-Agregar productos al carrito
+## Carrito
+### Agregar productos al carrito
 
-URL: POST /api/cart/<user_id>
-Descripción: Agrega productos al carrito de un usuario especificado por user_id.
+**URL:** `POST /api/cart/<user_id>`
+**Descripción:** Agrega productos al carrito de un usuario especificado por user_id.
 
-Cuerpo de la solicitud (JSON):
+**Cuerpo de la solicitud (JSON):**
 
 {
     "product_id": 1,
@@ -86,13 +87,13 @@ Respuesta esperada:
     Código 200: Producto agregado al carrito.
     Código 404: Usuario o producto no encontrado.
 
-Pedidos
-Crear un pedido
+## Pedidos
+### Crear un pedido
 
-URL: POST /api/orders
-Descripción: Genera un pedido basado en los productos seleccionados por el usuario.
+**URL:** `POST /api/orders`
+**Descripción:** Genera un pedido basado en los productos seleccionados por el usuario.
 
-Cuerpo de la solicitud (JSON):
+**Cuerpo de la solicitud (JSON):**
 
 {
     "user_id": 1,
