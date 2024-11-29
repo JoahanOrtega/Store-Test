@@ -24,6 +24,8 @@ Este proyecto proporciona una API RESTful desarrollada con Flask para gestionar 
     "email": "john@example.com",
     "password": "secure123"
 }
+```
+
 Respuesta esperada:
 
     Código 201: Usuario creado exitosamente.
