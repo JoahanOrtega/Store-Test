@@ -24,6 +24,7 @@ Este proyecto proporciona una API RESTful desarrollada con Flask para gestionar 
     "password": "secure123"
 }
 Respuesta esperada:
+
     Código 201: Usuario creado exitosamente.
     Código 400: Error en los datos proporcionados.
 
@@ -42,6 +43,7 @@ Respuesta esperada:
 }
 
 Respuesta esperada:
+
     Código 201: Categoría creada exitosamente.
     Código 400: Error en los datos proporcionados.
 
@@ -62,6 +64,7 @@ Respuesta esperada:
 }
 
 Respuesta esperada:
+
     Código 201: Producto creado exitosamente.
     Código 400: Error en los datos proporcionados.
 
@@ -79,6 +82,7 @@ Respuesta esperada:
 }
 
 Respuesta esperada:
+
     Código 200: Producto agregado al carrito.
     Código 404: Usuario o producto no encontrado.
 
