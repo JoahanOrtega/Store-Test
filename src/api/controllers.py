@@ -1,9 +1,12 @@
 from flask_restful import Resource, reqparse, abort
 from api.models import ProductModel, CategoryModel, OrderModel, UserModel, OrderItemModel, CartModel
 from api.extensions import db
-from datetime import datetime
 import re
 from werkzeug.security import generate_password_hash, check_password_hash
+# cart imports
+from decimal import Decimal
+from sqlalchemy.exc import SQLAlchemyError
+from datetime import datetime
 
 
 # Helper function for validation
@@ -399,6 +402,235 @@ class Products(Resource):
             db.session.rollback()
             abort(500, message=f"An error occurred while deleting product: {str(e)}")
 
+class Cart(Resource):
+    def __init__(self):
+        self.parser = reqparse.RequestParser()
+        self.parser.add_argument('product_id', type=int, required=True, help='Product ID is required')
+        self.parser.add_argument('quantity', type=int, required=True, help='Quantity is required')
+        self.parser.add_argument('replace', type=bool, default=False, help='Replace existing quantity instead of adding')
+        self.MAX_CART_ITEMS = 20
+
+    def get(self, user_id):
+        """
+        Get cart contents for a user
+        """
+        try:
+            # Verify user exists
+            user = db.session.get(UserModel, user_id)
+            if not user:
+                abort(404, message=f"User with id {user_id} not found")
+
+            cart_items = CartModel.get_user_cart(user_id)
+            items = []
+            removed_items = []
+            total = Decimal('0')
+
+            for item in cart_items:
+                if not item.is_valid:
+                    removed_items.append(item)
+                    continue
+
+                # Adjust quantity if needed
+                if item.product and item.product.stock < item.quantity:
+                    item.adjust_quantity(item.product.stock)
+                    db.session.add(item)
+
+                items.append({
+                    'id': item.id,
+                    'product_id': item.product_id,
+                    'product_name': item.product.name,
+                    'quantity': item.quantity,
+                    'price': float(item.product.price),
+                    'subtotal': float(item.subtotal),
+                    'stock_available': item.product.stock,
+                    'added_at': item.added_at.isoformat(),
+                    'updated_at': item.updated_at.isoformat()
+                })
+                total += item.subtotal
+
+            # Remove invalid items
+            for item in removed_items:
+                db.session.delete(item)
+
+            if removed_items or any(hasattr(item, '_modified') for item in cart_items):
+                db.session.commit()
+
+            return {
+                'user_id': user_id,
+                'items': items,
+                'total': float(total),
+                'item_count': len(items),
+                'updated_at': datetime.utcnow().isoformat(),
+                'messages': [
+                    "Some items were removed from your cart because they are no longer available"
+                    if removed_items else None,
+                    "Some item quantities were adjusted due to stock limitations"
+                    if any(hasattr(item, '_modified') for item in cart_items)
+                    else None
+                ]
+            }
+
+        except Exception as e:
+            db.session.rollback()
+            abort(500, message=f"An error occurred while retrieving cart: {str(e)}")
+
+    def post(self, user_id):
+        """
+        Add item to cart or update quantity
+        """
+        args = self.parser.parse_args()
+        
+        try:
+            # Verify user exists
+            user = db.session.get(UserModel, user_id)
+            if not user:
+                abort(404, message=f"User with id {user_id} not found")
+
+            # Verify product exists and has stock
+            product = db.session.get(ProductModel, args['product_id'])
+            if not product:
+                abort(404, message=f"Product with id {args['product_id']} not found")
+
+            if product.stock <= 0:
+                abort(400, message="Product is out of stock")
+
+            # Check cart item limit
+            current_items = CartModel.query.filter_by(user_id=user_id).count()
+            cart_item = CartModel.query.filter_by(
+                user_id=user_id,
+                product_id=args['product_id']
+            ).first()
+
+            if current_items >= self.MAX_CART_ITEMS and not cart_item:
+                abort(400, message=f"Cart cannot contain more than {self.MAX_CART_ITEMS} different items")
+
+            try:
+                if cart_item:
+                    # Update existing cart item
+                    new_quantity = args['quantity'] if args['replace'] else cart_item.quantity + args['quantity']
+                    cart_item.quantity = new_quantity  # This will trigger quantity validation
+                    message = "Cart item quantity updated successfully"
+                    status_code = 200
+                else:
+                    # Create new cart item
+                    cart_item = CartModel(
+                        user_id=user_id,
+                        product_id=args['product_id'],
+                        quantity=args['quantity']
+                    )
+                    db.session.add(cart_item)
+                    message = "Item added to cart successfully"
+                    status_code = 201
+
+                db.session.commit()
+
+                return {
+                    'message': message,
+                    'cart_item': {
+                        'id': cart_item.id,
+                        'product_id': cart_item.product_id,
+                        'product_name': cart_item.product.name,
+                        'quantity': cart_item.quantity,
+                        'price': float(cart_item.product.price),
+                        'subtotal': float(cart_item.subtotal),
+                        'stock_available': cart_item.product.stock,
+                        'added_at': cart_item.added_at.isoformat(),
+                        'updated_at': cart_item.updated_at.isoformat()
+                    }
+                }, status_code
+
+            except ValueError as ve:
+                abort(400, message=str(ve))
+
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            abort(500, message=f"Database error occurred: {str(e)}")
+        except Exception as e:
+            db.session.rollback()
+            abort(500, message=f"An error occurred: {str(e)}")
+
+    def put(self, user_id, product_id):
+        """
+        Update cart item quantity
+        """
+        args = self.parser.parse_args()
+        
+        try:
+            # Verify user exists
+            user = db.session.get(UserModel, user_id)
+            if not user:
+                abort(404, message=f"User with id {user_id} not found")
+
+            # Get cart item
+            cart_item = CartModel.query.filter_by(
+                user_id=user_id,
+                product_id=product_id
+            ).first()
+
+            if not cart_item:
+                abort(404, message="Item not found in cart")
+
+            try:
+                cart_item.quantity = args['quantity']  # This will trigger quantity validation
+                db.session.commit()
+
+                return {
+                    'message': 'Cart item updated successfully',
+                    'cart_item': {
+                        'id': cart_item.id,
+                        'product_id': cart_item.product_id,
+                        'product_name': cart_item.product.name,
+                        'quantity': cart_item.quantity,
+                        'price': float(cart_item.product.price),
+                        'subtotal': float(cart_item.subtotal),
+                        'stock_available': cart_item.product.stock,
+                        'updated_at': cart_item.updated_at.isoformat()
+                    }
+                }
+
+            except ValueError as ve:
+                abort(400, message=str(ve))
+
+        except Exception as e:
+            db.session.rollback()
+            abort(500, message=f"An error occurred while updating cart: {str(e)}")
+
+    def delete(self, user_id, product_id=None):
+        """
+        Remove item(s) from cart
+        """
+        try:
+            # Verify user exists
+            user = db.session.get(UserModel, user_id)
+            if not user:
+                abort(404, message=f"User with id {user_id} not found")
+
+            if product_id:
+                # Delete specific item
+                cart_item = CartModel.query.filter_by(
+                    user_id=user_id,
+                    product_id=product_id
+                ).first()
+
+                if not cart_item:
+                    abort(404, message="Item not found in cart")
+
+                db.session.delete(cart_item)
+                message = "Item removed from cart successfully"
+            else:
+                # Clear entire cart
+                deleted = CartModel.clear_cart(user_id)
+                if not deleted:
+                    return {'message': 'Cart is already empty'}, 200
+                message = "All items removed from cart successfully"
+
+            db.session.commit()
+            return {'message': message}
+
+        except Exception as e:
+            db.session.rollback()
+            abort(500, message=f"An error occurred while removing from cart: {str(e)}")
+
 class Orders(Resource):
     def __init__(self):
         self.parser = reqparse.RequestParser()
@@ -478,142 +710,3 @@ class Orders(Resource):
             db.session.rollback()
             abort(500, message=str(e))  
 
-class Cart(Resource):
-    def __init__(self):
-        self.parser = reqparse.RequestParser()
-        self.parser.add_argument('product_id', type=int, required=True, help='Product ID is required')
-        self.parser.add_argument('quantity', type=int, required=True, help='Quantity is required')
-
-    def get(self, user_id):
-        cart_items = CartModel.query.filter_by(user_id=user_id).all()
-        total = 0
-        items = []
-        
-        for item in cart_items:
-            product = ProductModel.query.get(item.product_id)
-            subtotal = product.price * item.quantity
-            total += subtotal
-            items.append({
-                'product_id': item.product_id,
-                'product_name': product.name,
-                'quantity': item.quantity,
-                'price': product.price,
-                'subtotal': subtotal
-            })
-        
-        return {
-            'user_id': user_id,
-            'items': items,
-            'total': total
-        }
-
-    def post(self, user_id):
-        args = self.parser.parse_args()
-        
-        try:
-            # Validate user exists
-            user = db.session.execute(
-                select(UserModel).filter_by(id=user_id)
-            ).scalar_one_or_none()
-            
-            if not user:
-                return {'message': f'User with ID {user_id} not found'}, 404
-
-            # Validate product exists and has sufficient stock
-            product = db.session.execute(
-                select(ProductModel).filter_by(id=args['product_id'])
-            ).scalar_one_or_none()
-            
-            if not product:
-                return {
-                    'message': f'Product with ID {args["product_id"]} not found'
-                }, 404
-
-            # Validate quantity
-            if args['quantity'] <= 0:
-                return {'message': 'Quantity must be greater than 0'}, 400
-
-            if product.stock < args['quantity']:
-                return {
-                    'message': f'Insufficient stock. Available: {product.stock}'
-                }, 400
-
-            # Check if item already in cart
-            cart_item = db.session.execute(
-                select(CartModel).filter_by(
-                    user_id=user_id,
-                    product_id=args['product_id']
-                )
-            ).scalar_one_or_none()
-
-            if cart_item:
-                # Update existing cart item
-                new_quantity = cart_item.quantity + args['quantity']
-                if new_quantity > product.stock:
-                    return {
-                        'message': (
-                            f'Cannot add {args["quantity"]} items. '
-                            f'Cart already has {cart_item.quantity} items. '
-                            f'Stock available: {product.stock}'
-                        )
-                    }, 400
-                
-                cart_item.quantity = new_quantity
-                message = 'Cart item quantity updated successfully'
-            else:
-                # Create new cart item
-                cart_item = CartModel(
-                    user_id=user_id,
-                    product_id=args['product_id'],
-                    quantity=args['quantity']
-                )
-                db.session.add(cart_item)
-                message = 'Item added to cart successfully'
-
-            db.session.commit()
-            
-            # Return response with cart item details
-            return {
-                'message': message,
-                'cart_item': {
-                    'id': cart_item.id,
-                    'user_id': cart_item.user_id,
-                    'product_id': cart_item.product_id,
-                    'quantity': cart_item.quantity,
-                    'product_name': product.name,
-                    'unit_price': product.price,
-                    'total_price': product.price * cart_item.quantity
-                }
-            }, 200 if cart_item else 201
-
-        except ValueError as e:
-            db.session.rollback()
-            return {'message': str(e)}, 400
-        
-        except Exception as e:
-            db.session.rollback()
-            return {
-                'message': 'An error occurred while processing your request',
-                'error': str(e)
-            }, 500
-
-    def delete(self, user_id):
-        parser = reqparse.RequestParser()
-        parser.add_argument('product_id', type=int, required=True, help="Product ID is required")
-        args = parser.parse_args()
-
-        try:
-            cart_item = CartModel.query.filter_by(
-                user_id=user_id,
-                product_id=args['product_id']
-            ).first()
-
-            if cart_item:
-                db.session.delete(cart_item)
-                db.session.commit()
-                return {'message': 'Item removed from cart successfully'}
-            else:
-                abort(404, message="Item not found in cart")
-        except Exception as e:
-            db.session.rollback()
-            abort(500, message=f"An error occurred while removing from cart: {str(e)}")

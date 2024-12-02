@@ -1,8 +1,8 @@
 import pytest
 from flask import Flask
 from api.extensions import db
-from api.models import UserModel, CategoryModel, ProductModel
-from api.controllers import Users, Categories, Products
+from api.models import UserModel, CategoryModel, ProductModel, CartModel
+from api.controllers import Users, Categories, Products, Cart
 from flask_restful import Api
 import json
 
@@ -22,6 +22,8 @@ def app():
     api.add_resource(Users, '/api/users', '/api/users/<int:user_id>')
     api.add_resource(Categories, '/api/categories', '/api/categories/<int:category_id>')
     api.add_resource(Products, '/api/products', '/api/products/<int:product_id>')
+    api.add_resource(Cart, '/api/cart', '/api/cart/<int:user_id>')
+
     
     return app
 
@@ -62,12 +64,30 @@ def init_database(app):
             )
             db.session.add(product)
         
+        # Helper function to create a test Cart
+        def create_test_cart(user_id, product_id, quantity):
+            cart = CartModel(
+                user_id=user_id,
+                product_id=product_id,
+                quantity=quantity
+            )
+            db.session.add(cart)
+
+
         # Add initial data
         create_test_user("testuser1", "test1@example.com", "password123")
+        create_test_user("john_doe", "john@example.com", "secure123")
+        
         create_test_category("Electronics", "Electronic devices and accessories")
         create_test_category("Sports", "Sports equipment and accessories")
+        
         create_test_product("Smartphone", 699.99, "Latest model smartphone", 50, 1)
         create_test_product("Laptop", 1499.99, "Latest model laptop", 25, 1)
+        create_test_product("Smartwatch", 1499.99, "Latest model smartwatch", 5, 1)
+
+        create_test_cart(2, 1, 2)
+        create_test_cart(2, 2, 1)
+
         
         db.session.commit()
         yield db
@@ -383,7 +403,7 @@ def test_get_all_categories(client, init_database):
         'id': 1,
         'name': 'Electronics',
         'description': 'Electronic devices and accessories',
-        'product_count': 2
+        'product_count': 3
     }
 
 def test_get_single_category(client, init_database):
@@ -405,6 +425,11 @@ def test_get_single_category(client, init_database):
             {
                 'id': 2,
                 'name': 'Laptop',
+                'price': 1499.99,
+            },
+            {
+                'id': 3,
+                'name': 'Smartwatch',
                 'price': 1499.99,
             },
         ],
@@ -506,6 +531,13 @@ def test_get_all_products(client, init_database):
                 "price": 1499.99,
                 "description": "Latest model laptop",
                 "stock": 25
+            },
+            {
+                "id": 3,
+                "name": "Smartwatch",
+                "price": 1499.99,
+                "description": "Latest model smartwatch",
+                "stock": 5
             },
         ]
     }
@@ -709,7 +741,8 @@ def test_update_product_success(client, init_database):
 # DELETE Tests
 def test_delete_product_success(client, init_database):
     """Test successful product deletion"""
-    response = client.delete('/api/products/1')
+    response = client.delete('/api/products/3')
     
     assert response.status_code == 200
     assert response.json == {"message": "Product deleted successfully"}
+

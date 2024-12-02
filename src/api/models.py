@@ -1,7 +1,9 @@
 from api.extensions import db
-from datetime import datetime
 from api.extensions import db
 from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
+from sqlalchemy.orm import validates
+from decimal import Decimal
 
 class UserModel(db.Model):
     __tablename__ = 'users'
@@ -18,7 +20,13 @@ class UserModel(db.Model):
         return check_password_hash(self.password, password)
     
     # Relationships
-    cart_items = db.relationship('CartModel', backref='user', lazy=True)
+    # Define relationship to cart items
+    cart_items = db.relationship(
+        'CartModel',
+        back_populates='user',
+        cascade='all, delete-orphan',
+        lazy=True
+    )
     orders = db.relationship('OrderModel', backref='user', lazy=True)
 
     def __repr__(self):
@@ -50,7 +58,13 @@ class ProductModel(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    cart_items = db.relationship('CartModel', backref='product', lazy=True)
+    # Define relationship to cart items
+    cart_items = db.relationship(
+        'CartModel',
+        back_populates='product',
+        cascade='all, delete-orphan',
+        lazy=True
+    )
     order_items = db.relationship('OrderItemModel', backref='product', lazy=True)
 
     def __repr__(self):
@@ -61,13 +75,77 @@ class CartModel(db.Model):
     __tablename__ = 'cart_items'
     
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id', ondelete='CASCADE'), nullable=False)
     quantity = db.Column(db.Integer, nullable=False, default=1)
     added_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Define relationships without backrefs
+    user = db.relationship('UserModel', back_populates='cart_items')
+    product = db.relationship('ProductModel', back_populates='cart_items')
+
+    # Constants
+    MAX_QUANTITY = 99
+    MIN_QUANTITY = 1
+
+    @validates('quantity')
+    def validate_quantity(self, key, quantity):
+        """Validate quantity is within acceptable range"""
+        if not isinstance(quantity, int):
+            raise ValueError("Quantity must be an integer")
+        if quantity < self.MIN_QUANTITY:
+            raise ValueError("Quantity must be greater than 0")
+        if quantity > self.MAX_QUANTITY:
+            raise ValueError(f"Quantity cannot exceed {self.MAX_QUANTITY}")
+        return quantity
+    
+    @property
+    def subtotal(self):
+        """Calculate subtotal for cart item"""
+        if self.product:
+            return Decimal(str(self.product.price)) * Decimal(str(self.quantity))
+        return Decimal('0')
+    
+    @property
+    def is_valid(self):
+        """Check if cart item is still valid"""
+        if not self.product:
+            return False
+        if self.product.stock < self.quantity:
+            return False
+        return True
+    
+    def adjust_quantity(self, available_stock):
+        """Adjust quantity based on available stock"""
+        if available_stock < self.quantity:
+            self.quantity = available_stock
+            return True
+        return False
+    
+    def __init__(self, user_id, product_id, quantity=1):
+        self.user_id = user_id
+        self.product_id = product_id
+        self.quantity = quantity
 
     def __repr__(self):
-        return f'<CartItem user_id={self.user_id} product_id={self.product_id}>'
+        return f'<CartItem user_id={self.user_id} product_id={self.product_id} quantity={self.quantity}>'
+
+    @classmethod
+    def get_user_cart(cls, user_id):
+        """Get all cart items for a user"""
+        return cls.query.filter_by(user_id=user_id).all()
+
+    @classmethod
+    def get_cart_total(cls, user_id):
+        """Calculate total for user's cart"""
+        cart_items = cls.get_user_cart(user_id)
+        return sum(item.subtotal for item in cart_items)
+
+    @classmethod
+    def clear_cart(cls, user_id):
+        """Remove all items from user's cart"""
+        return cls.query.filter_by(user_id=user_id).delete()
 
 class OrderModel(db.Model):
     __tablename__ = 'orders'
