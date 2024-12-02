@@ -567,52 +567,6 @@ class Cart(Resource):
             db.session.rollback()
             return {'message': f"An unexpected error occurred: {str(e)}"}, 500
 
-    def put(self, user_id, product_id):
-        """
-        Update cart item quantity
-        """
-        args = self.parser.parse_args()
-        
-        try:
-            # Verify user exists
-            user = db.session.get(UserModel, user_id)
-            if not user:
-                abort(404, message=f"User with id {user_id} not found")
-
-            # Get cart item
-            cart_item = CartModel.query.filter_by(
-                user_id=user_id,
-                product_id=product_id
-            ).first()
-
-            if not cart_item:
-                abort(404, message="Item not found in cart")
-
-            try:
-                cart_item.quantity = args['quantity']  # This will trigger quantity validation
-                db.session.commit()
-
-                return {
-                    'message': 'Cart item updated successfully',
-                    'cart_item': {
-                        'id': cart_item.id,
-                        'product_id': cart_item.product_id,
-                        'product_name': cart_item.product.name,
-                        'quantity': cart_item.quantity,
-                        'price': float(cart_item.product.price),
-                        'subtotal': float(cart_item.subtotal),
-                        'stock_available': cart_item.product.stock,
-                        'updated_at': cart_item.updated_at.isoformat()
-                    }
-                }
-
-            except ValueError as ve:
-                abort(400, message=str(ve))
-
-        except Exception as e:
-            db.session.rollback()
-            abort(500, message=f"An error occurred while updating cart: {str(e)}")
-
     def delete(self, user_id, product_id=None):
         """
         Remove item(s) from cart
@@ -655,79 +609,124 @@ class Cart(Resource):
 class Orders(Resource):
     def __init__(self):
         self.parser = reqparse.RequestParser()
-        self.parser.add_argument('user_id', type=int, required=True)
-        self.parser.add_argument('items', type=list, required=True, location='json')
+        self.parser.add_argument('user_id', type=int, required=True, help='User ID is required')
+        self.parser.add_argument('items', type=list, required=True, location='json', 
+                                help='Items list is required')
 
     def get(self, order_id=None):
-        if order_id:
-            order = OrderModel.query.get_or_404(order_id)
-            return {
-                'id': order.id,
-                'user_id': order.user_id,
-                'total_amount': order.total_amount,
-                'status': order.status,
-                'created_at': str(order.created_at),
-                'items': [{
-                    'product_id': item.product_id,
-                    'quantity': item.quantity,
-                    'price': item.price_at_time
-                } for item in order.items]
-            }
-        
-        orders = OrderModel.query.all()
-        return {'orders': [{
-            'id': o.id,
-            'user_id': o.user_id,
-            'total_amount': o.total_amount,
-            'status': o.status,
-            'created_at': str(o.created_at)
-        } for o in orders]}
+        try:
+            if order_id:
+                order = db.session.get(OrderModel, order_id)  # New syntax
+                if not order:
+                    return {'message': f'Order with id {order_id} not found'}, 404
+
+                return {
+                    'id': order.id,
+                    'user_id': order.user_id,
+                    'total_amount': float(order.total_amount),
+                    'status': order.status,
+                    'created_at': order.created_at.isoformat(),
+                    'items': [{
+                        'product_id': item.product_id,
+                        'product_name': item.product.name,
+                        'quantity': item.quantity,
+                        'price': float(item.price_at_time),
+                        'subtotal': float(item.price_at_time * item.quantity)
+                    } for item in order.items]
+                }
+            
+            orders = OrderModel.query.all()
+            return {'orders': [{
+                'id': o.id,
+                'user_id': o.user_id,
+                'total_amount': float(o.total_amount),
+                'status': o.status,
+                'created_at': o.created_at.isoformat()
+            } for o in orders]}
+
+        except Exception as e:
+            return {'message': f'An error occurred: {str(e)}'}, 500
 
     def post(self):
-        args = self.parser.parse_args()
-        
-        if not args['items']:
-            abort(400, message="Order must contain at least one item")
-            
-        # Validate user exists
-        user = UserModel.query.get(args['user_id'])
-        if not user:
-            abort(404, message=f"User {args['user_id']} not found")
-            
-        # Create order
-        order = OrderModel(user_id=args['user_id'])
-        db.session.add(order)
-        db.session.flush()
-        
-        # Add order items
-        for item in args['items']:
-            product = ProductModel.query.get(item['product_id'])
-            if not product:
-                db.session.rollback()
-                abort(404, message=f"Product {item['product_id']} not found")
-                
-            if item['quantity'] <= 0:
-                db.session.rollback()
-                abort(400, message="Quantity must be positive")
-                
-            if product.stock < item['quantity']:
-                db.session.rollback()
-                abort(400, message=f"Insufficient stock for product {product.id}")
-                
-            order_item = OrderItemModel(
-                order_id=order.id,
-                product_id=product.id,
-                quantity=item['quantity']
-            )
-            db.session.add(order_item)
-            
-            # Update stock
-            product.stock -= item['quantity']
-            
         try:
+            args = self.parser.parse_args()
+            
+            if not args['items']:
+                return {'message': 'Order must contain at least one item'}, 400
+                
+            # Validate user exists
+            user = db.session.get(UserModel, args['user_id'])
+            if not user:
+                return {'message': f"User {args['user_id']} not found"}, 404
+                
+            # Create order
+            order = OrderModel(
+                user_id=args['user_id'],
+                status='pending',
+                created_at=datetime.now(UTC),
+                total_amount=0
+            )
+            db.session.add(order)
+            db.session.flush()
+            
+            total_amount = Decimal('0')
+            
+            # Process order items
+            for item in args['items']:
+                product = db.session.get(ProductModel, item['product_id'])
+                if not product:
+                    db.session.rollback()
+                    return {'message': f"Product {item['product_id']} not found"}, 404
+                    
+                if item['quantity'] <= 0:
+                    db.session.rollback()
+                    return {'message': "Quantity must be positive"}, 400
+                    
+                if product.stock < item['quantity']:
+                    db.session.rollback()
+                    return {'message': f"Insufficient stock for product {product.id}"}, 400
+                    
+                # Create order item
+                order_item = OrderItemModel(
+                    order_id=order.id,
+                    product_id=product.id,
+                    quantity=item['quantity'],
+                    price_at_time=float(product.price)
+                )
+                db.session.add(order_item)
+                
+                # Update stock
+                product.stock = product.stock - item['quantity']
+                db.session.add(product)  # Explicitly add the updated product
+                
+                # Calculate subtotal
+                item_total = Decimal(str(product.price)) * item['quantity']
+                total_amount += item_total
+            
+            # Update order total
+            order.total_amount = float(total_amount.quantize(Decimal('0.01')))
+            
             db.session.commit()
-            return {'message': 'Order created successfully', 'id': order.id}, 201
+            
+            return {
+                'message': 'Order created successfully',
+                'order': {
+                    'id': order.id,
+                    'user_id': order.user_id,
+                    'total_amount': float(order.total_amount),
+                    'status': order.status,
+                    'created_at': order.created_at.isoformat(),
+                    'items': [{
+                        'product_id': item.product_id,
+                        'product_name': item.product.name,
+                        'quantity': item.quantity,
+                        'price': float(item.price_at_time),
+                        'subtotal': float(Decimal(str(item.price_at_time)) * item.quantity)
+                    } for item in order.items]
+                }
+            }, 201
+
         except Exception as e:
             db.session.rollback()
-            abort(500, message=str(e))  
+            return {'message': f'An error occurred: {str(e)}'}, 500
 

@@ -3,7 +3,7 @@ import pytest
 from flask import Flask
 from api.extensions import db
 from api.models import UserModel, CategoryModel, ProductModel, CartModel, OrderModel, OrderItemModel
-from api.controllers import Users, Categories, Products, Cart
+from api.controllers import Users, Categories, Products, Cart, Orders
 from flask_restful import Api
 import json
 
@@ -24,6 +24,7 @@ def app():
     api.add_resource(Categories, '/api/categories', '/api/categories/<int:category_id>')
     api.add_resource(Products, '/api/products', '/api/products/<int:product_id>')
     api.add_resource(Cart, '/api/cart', '/api/cart/<int:user_id>', '/api/cart/<int:user_id>/<int:product_id>')
+    api.add_resource(Orders, '/api/orders', '/api/orders/<int:order_id>')
 
     
     return app
@@ -73,7 +74,6 @@ def init_database(app):
                 quantity=quantity
             )
             db.session.add(cart)
-
 
         # Add initial data
         create_test_user("testuser1", "test1@example.com", "password123")
@@ -971,3 +971,251 @@ def test_delete_cart_item_invalid_ids(client, init_database):
     
     assert response.status_code == 404  # or whatever your app returns for invalid URLs
 
+def test_get_all_orders(client, init_database):
+    """Test getting all orders"""
+    # Create multiple orders
+    order_data1 = {
+        'user_id': 1,
+        'items': [{'product_id': 1, 'quantity': 1}]
+    }
+    order_data2 = {
+        'user_id': 1,
+        'items': [{'product_id': 2, 'quantity': 1}]
+    }
+    
+    response1 = client.post('/api/orders', json=order_data1)
+    response2 = client.post('/api/orders', json=order_data2)
+    
+    assert response1.status_code == 201
+    assert response2.status_code == 201
+    
+    # Get all orders
+    response = client.get('/api/orders')
+    
+    assert response.status_code == 200
+    assert 'orders' in response.json
+    orders = response.json['orders']
+    assert len(orders) >= 2
+    
+    # Verify order structure
+    for order in orders:
+        assert 'id' in order
+        assert 'user_id' in order
+        assert 'total_amount' in order
+        assert 'status' in order
+        assert 'created_at' in order
+
+def test_get_order_with_multiple_items(client, init_database):
+    """Test getting an order with multiple items"""
+    # Create an order with multiple items
+    order_data = {
+        'user_id': 1,
+        'items': [
+            {'product_id': 1, 'quantity': 2},
+            {'product_id': 2, 'quantity': 1}
+        ]
+    }
+    
+    create_response = client.post('/api/orders', json=order_data)
+    assert create_response.status_code == 201
+    order_id = create_response.json['order']['id']
+    
+    # Get the order
+    response = client.get(f'/api/orders/{order_id}')
+    
+    assert response.status_code == 200
+    assert response.json['id'] == order_id
+    assert len(response.json['items']) == 2
+    
+    # Verify items
+    items = response.json['items']
+    assert items[0]['product_id'] == 1
+    assert items[0]['quantity'] == 2
+    assert items[1]['product_id'] == 2
+    assert items[1]['quantity'] == 1
+    
+    # Verify total amount
+    expected_total = (2 * 699.99) + (1 * 1499.99)
+    assert response.json['total_amount'] == pytest.approx(expected_total, 0.01)
+
+def test_get_nonexistent_order(client, init_database):
+    """Test getting a non-existent order"""
+    response = client.get('/api/orders/999')
+    
+    assert response.status_code == 404
+
+def test_get_order_by_id(client, init_database):
+    """Test getting a specific order"""
+    # First create an order
+    order_data = {
+        'user_id': 1,
+        'items': [{'product_id': 1, 'quantity': 1}]
+    }
+    create_response = client.post('/api/orders', json=order_data)
+    assert create_response.status_code == 201
+    order_id = create_response.json['order']['id']
+    
+    # Get the order
+    response = client.get(f'/api/orders/{order_id}')
+    
+    assert response.status_code == 200
+    assert response.json['id'] == order_id
+    assert response.json['user_id'] == 1
+    assert len(response.json['items']) == 1
+    assert 'total_amount' in response.json
+    assert 'status' in response.json
+    assert 'created_at' in response.json
+
+    # Verify order details
+    assert response.json['status'] == 'pending'
+    assert isinstance(response.json['total_amount'], (int, float))
+    
+    # Verify items
+    items = response.json['items']
+    assert len(items) == 1
+    assert items[0]['product_id'] == 1
+    assert items[0]['quantity'] == 1
+    assert 'price' in items[0]
+
+def test_create_order_success(client, init_database):
+    """Test creating a valid order"""
+    # Verify initial stock
+    with client.application.app_context():
+        product1 = db.session.get(ProductModel, 1)
+        product2 = db.session.get(ProductModel, 2)
+        assert product1.stock == 50, "Initial stock for product 1 should be 10"
+        assert product2.stock == 25, "Initial stock for product 2 should be 5"
+
+    order_data = {
+        'user_id': 1,
+        'items': [
+            {'product_id': 1, 'quantity': 2},
+            {'product_id': 2, 'quantity': 1}
+        ]
+    }
+
+    response = client.post('/api/orders', json=order_data)
+
+    assert response.status_code == 201
+    assert 'Order created successfully' in response.json['message']
+    assert 'order' in response.json
+    assert 'id' in response.json['order']
+    
+    # Verify order details
+    order = response.json['order']
+    assert order['user_id'] == 1
+    assert order['status'] == 'pending'
+    assert len(order['items']) == 2
+
+    # Verify items details
+    items = order['items']
+    assert items[0]['product_id'] == 1
+    assert items[0]['quantity'] == 2
+    assert items[0]['price'] == 699.99
+    assert items[1]['product_id'] == 2
+    assert items[1]['quantity'] == 1
+    assert items[1]['price'] == 1499.99
+
+    # Verify stock was updated
+    with client.application.app_context():
+        db.session.expire_all()  # Refresh session to get latest data
+        product1 = db.session.get(ProductModel, 1)
+        product2 = db.session.get(ProductModel, 2)
+        assert product1.stock == 48, f"Expected stock 8, got {product1.stock}"  # 50 - 2
+        assert product2.stock == 24, f"Expected stock 4, got {product2.stock}"  # 25 - 1
+
+    # Verify total amount
+    expected_total = (2 * 699.99) + (1 * 1499.99)
+    assert order['total_amount'] == pytest.approx(expected_total, 0.01)
+
+def test_create_order_empty_items(client, init_database):
+    """Test creating order with no items"""
+    order_data = {
+        'user_id': 1,
+        'items': []
+    }
+    
+    response = client.post('/api/orders', json=order_data)
+    
+    assert response.status_code == 400
+    assert 'must contain at least one item' in response.json['message']
+
+def test_create_order_nonexistent_user(client, init_database):
+    """Test creating order for non-existent user"""
+    order_data = {
+        'user_id': 999,
+        'items': [{'product_id': 1, 'quantity': 1}]
+    }
+    
+    response = client.post('/api/orders', json=order_data)
+    
+    assert response.status_code == 404
+    assert 'User 999 not found' in response.json['message']
+
+def test_create_order_nonexistent_product(client, init_database):
+    """Test creating order with non-existent product"""
+    order_data = {
+        'user_id': 1,
+        'items': [{'product_id': 999, 'quantity': 1}]
+    }
+    
+    response = client.post('/api/orders', json=order_data)
+    
+    assert response.status_code == 404
+    assert 'Product 999 not found' in response.json['message']
+
+def test_create_order_insufficient_stock(client, init_database):
+    """Test creating order with insufficient stock"""
+    order_data = {
+        'user_id': 1,
+        'items': [{'product_id': 1, 'quantity': 51}]  # Stock is 50
+    }
+    
+    response = client.post('/api/orders', json=order_data)
+    
+    assert response.status_code == 400
+    assert 'Insufficient stock' in response.json['message']
+
+def test_create_order_zero_quantity(client, init_database):
+    """Test creating order with zero quantity"""
+    order_data = {
+        'user_id': 1,
+        'items': [{'product_id': 1, 'quantity': 0}]
+    }
+    
+    response = client.post('/api/orders', json=order_data)
+    
+    assert response.status_code == 400
+    assert 'Quantity must be positive' in response.json['message']
+
+def test_create_order_negative_quantity(client, init_database):
+    """Test creating order with negative quantity"""
+    order_data = {
+        'user_id': 1,
+        'items': [{'product_id': 1, 'quantity': -1}]
+    }
+    
+    response = client.post('/api/orders', json=order_data)
+    
+    assert response.status_code == 400
+    assert 'Quantity must be positive' in response.json['message']
+
+def test_create_order_multiple_items_same_product(client, init_database):
+    """Test creating order with multiple items of same product"""
+    order_data = {
+        'user_id': 1,
+        'items': [
+            {'product_id': 1, 'quantity': 2},
+            {'product_id': 1, 'quantity': 3}
+        ]
+    }
+    
+    response = client.post('/api/orders', json=order_data)
+    
+    assert response.status_code == 201
+    assert 'Order created successfully' in response.json['message']
+    
+    # Verify stock was updated correctly
+    with client.application.app_context():
+        product = db.session.get(ProductModel, 1)  # New syntax
+        assert product.stock == 45  # 50 - (2 + 3)
