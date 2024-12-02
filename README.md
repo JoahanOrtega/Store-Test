@@ -15,27 +15,29 @@ Este proyecto proporciona una API RESTful desarrollada con Flask para gestionar 
 
 ### Crear un usuario
 **URL:** `POST /api/users`  
-**Descripción:** Crea un nuevo usuario en el sistema.  
+**Descripción:** 
+Crea un nuevo usuario en el sistema.  
 
 **Cuerpo de la solicitud (JSON):**
+
 {
     "username": "john_doe",
     "email": "john@example.com",
     "password": "secure123"
 }
-```
 
 Respuesta esperada:
 
     Código 201: Usuario creado exitosamente.
     Código 400: Error en los datos proporcionados.
 
-## Usuarios
+## Categorías
 
 ### Crear una categoría
 
 **URL:** `POST /api/categories`
-**Descripción:** Agrega una nueva categoría de productos.
+**Descripción:** 
+Agrega una nueva categoría de productos.
 
 **Cuerpo de la solicitud (JSON):**
 
@@ -50,10 +52,12 @@ Respuesta esperada:
     Código 400: Error en los datos proporcionados.
 
 ## Productos
-### Crear un producto
+### Crear un p
+roducto
 
 **URL:** `POST /api/products`
-**Descripción:** Agrega un nuevo producto a una categoría existente.
+**Descripción:** 
+Agrega un nuevo producto a una categoría existente.
 
 **Cuerpo de la solicitud (JSON):**
 
@@ -74,7 +78,8 @@ Respuesta esperada:
 ### Agregar productos al carrito
 
 **URL:** `POST /api/cart/<user_id>`
-**Descripción:** Agrega productos al carrito de un usuario especificado por user_id.
+**Descripción:** 
+Agrega productos al carrito de un usuario especificado por user_id.
 
 **Cuerpo de la solicitud (JSON):**
 
@@ -92,7 +97,8 @@ Respuesta esperada:
 ### Crear un pedido
 
 **URL:** `POST /api/orders`
-**Descripción:** Genera un pedido basado en los productos seleccionados por el usuario.
+**Descripción:** 
+Genera un pedido basado en los productos seleccionados por el usuario.
 
 **Cuerpo de la solicitud (JSON):**
 
