@@ -24,6 +24,18 @@ class UserModel(db.Model):
     def __repr__(self):
         return f'<User {self.username}>'
 
+class CategoryModel(db.Model):
+    __tablename__ = 'categories'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), nullable=False)
+    description = db.Column(db.String(200))
+    
+    # Relationships
+    products = db.relationship('ProductModel', backref='category', lazy=True)
+
+    def __repr__(self):
+        return f'<Category {self.name}>'
 
 class ProductModel(db.Model):
     __tablename__ = 'products'
@@ -44,18 +56,6 @@ class ProductModel(db.Model):
     def __repr__(self):
         return f'<Product {self.name}>'
 
-class CategoryModel(db.Model):
-    __tablename__ = 'categories'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), nullable=False)
-    description = db.Column(db.String(200))
-    
-    # Relationships
-    products = db.relationship('ProductModel', backref='category', lazy=True)
-
-    def __repr__(self):
-        return f'<Category {self.name}>'
 
 class CartModel(db.Model):
     __tablename__ = 'cart_items'

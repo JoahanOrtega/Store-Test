@@ -205,7 +205,6 @@ class Users(Resource):
             db.session.rollback()
             abort(500, message=f"An error occurred while deleting user: {str(e)}")
 
-
 class Categories(Resource):
     def __init__(self):
         self.parser = reqparse.RequestParser()
@@ -332,17 +331,43 @@ class Products(Resource):
     def post(self):
         args = self.parser.parse_args()
         
-        # Validate category exists
-        abort_if_not_found(CategoryModel, args['category_id'])
+        # Name validations
+        if len(args['name'].strip()) < 3:
+            abort(400, message="Product name must be at least 3 characters long")
+        if len(args['name']) > 100:
+            abort(400, message="Product name cannot exceed 100 characters")
         
+        # Price validations
         if args['price'] <= 0:
             abort(400, message="Price must be greater than 0")
+        if args['price'] > 1000000:  # 1 million limit
+            abort(400, message="Price cannot exceed 1,000,000")
         
+        # Stock validations
         if args['stock'] < 0:
             abort(400, message="Stock cannot be negative")
+        if args['stock'] > 10000:  # Reasonable stock limit
+            abort(400, message="Stock cannot exceed 10,000 units")
+        
+        # Description validation (if provided)
+        if args['description'] and len(args['description']) > 1000:
+            abort(400, message="Description cannot exceed 1000 characters")
+            
+        # Validate category exists
+        category = db.session.get(CategoryModel, args['category_id'])
+        if not category:
+            abort(404, message=f"CategoryModel with id {args['category_id']} not found")
+        
+        # Check for duplicate product names in the same category
+        existing_product = ProductModel.query.filter_by(
+            name=args['name'],
+            category_id=args['category_id']
+        ).first()
+        if existing_product:
+            abort(400, message="A product with this name already exists in this category")
 
-        product = ProductModel(**args)
         try:
+            product = ProductModel(**args)
             db.session.add(product)
             db.session.commit()
             return {'message': 'Product created successfully', 'id': product.id}, 201
