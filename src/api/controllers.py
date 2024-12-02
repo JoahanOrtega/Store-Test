@@ -6,7 +6,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # cart imports
 from decimal import Decimal
 from sqlalchemy.exc import SQLAlchemyError
-from datetime import datetime
+from datetime import datetime, UTC
 
 
 # Helper function for validation
@@ -418,7 +418,7 @@ class Cart(Resource):
             # Verify user exists
             user = db.session.get(UserModel, user_id)
             if not user:
-                abort(404, message=f"User with id {user_id} not found")
+                return {'message': f"User with id {user_id} not found"}, 404
 
             cart_items = CartModel.get_user_cart(user_id)
             items = []
@@ -460,7 +460,7 @@ class Cart(Resource):
                 'items': items,
                 'total': float(total),
                 'item_count': len(items),
-                'updated_at': datetime.utcnow().isoformat(),
+                'updated_at': datetime.now(UTC).isoformat(),
                 'messages': [
                     "Some items were removed from your cart because they are no longer available"
                     if removed_items else None,
@@ -470,29 +470,41 @@ class Cart(Resource):
                 ]
             }
 
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            return {'message': f"Database error: {str(e)}"}, 500
         except Exception as e:
             db.session.rollback()
-            abort(500, message=f"An error occurred while retrieving cart: {str(e)}")
+            return {'message': f"An unexpected error occurred: {str(e)}"}, 500
+
 
     def post(self, user_id):
         """
         Add item to cart or update quantity
         """
-        args = self.parser.parse_args()
-        
         try:
+            args = self.parser.parse_args()
+            
             # Verify user exists
             user = db.session.get(UserModel, user_id)
             if not user:
-                abort(404, message=f"User with id {user_id} not found")
+                return {'message': f"User with id {user_id} not found"}, 404
 
-            # Verify product exists and has stock
+            # Verify product exists
             product = db.session.get(ProductModel, args['product_id'])
             if not product:
-                abort(404, message=f"Product with id {args['product_id']} not found")
+                return {'message': f"Product with id {args['product_id']} not found"}, 404
 
+            # Check if product is in stock
             if product.stock <= 0:
-                abort(400, message="Product is out of stock")
+                return {'message': "Product is out of stock"}, 400
+
+            # Validate quantity
+            if args['quantity'] <= 0:
+                return {'message': "Quantity must be greater than 0"}, 400
+
+            if args['quantity'] > product.stock:
+                return {'message': f"Requested quantity ({args['quantity']}) exceeds available stock ({product.stock})"}, 400
 
             # Check cart item limit
             current_items = CartModel.query.filter_by(user_id=user_id).count()
@@ -502,13 +514,18 @@ class Cart(Resource):
             ).first()
 
             if current_items >= self.MAX_CART_ITEMS and not cart_item:
-                abort(400, message=f"Cart cannot contain more than {self.MAX_CART_ITEMS} different items")
+                return {'message': f"Cart cannot contain more than {self.MAX_CART_ITEMS} different items"}, 400
 
             try:
                 if cart_item:
                     # Update existing cart item
                     new_quantity = args['quantity'] if args['replace'] else cart_item.quantity + args['quantity']
-                    cart_item.quantity = new_quantity  # This will trigger quantity validation
+                    
+                    # Check if new quantity exceeds stock
+                    if new_quantity > product.stock:
+                        return {'message': f"Total quantity ({new_quantity}) would exceed available stock ({product.stock})"}, 400
+                    
+                    cart_item.quantity = new_quantity
                     message = "Cart item quantity updated successfully"
                     status_code = 200
                 else:
@@ -540,14 +557,15 @@ class Cart(Resource):
                 }, status_code
 
             except ValueError as ve:
-                abort(400, message=str(ve))
+                db.session.rollback()
+                return {'message': str(ve)}, 400
 
         except SQLAlchemyError as e:
             db.session.rollback()
-            abort(500, message=f"Database error occurred: {str(e)}")
+            return {'message': f"Database error: {str(e)}"}, 500
         except Exception as e:
             db.session.rollback()
-            abort(500, message=f"An error occurred: {str(e)}")
+            return {'message': f"An unexpected error occurred: {str(e)}"}, 500
 
     def put(self, user_id, product_id):
         """
@@ -603,7 +621,7 @@ class Cart(Resource):
             # Verify user exists
             user = db.session.get(UserModel, user_id)
             if not user:
-                abort(404, message=f"User with id {user_id} not found")
+                return {'message': f"User with id {user_id} not found"}, 404
 
             if product_id:
                 # Delete specific item
@@ -613,7 +631,7 @@ class Cart(Resource):
                 ).first()
 
                 if not cart_item:
-                    abort(404, message="Item not found in cart")
+                    return {'message': "Item not found in cart"}, 404
 
                 db.session.delete(cart_item)
                 message = "Item removed from cart successfully"
@@ -622,15 +640,18 @@ class Cart(Resource):
                 deleted = CartModel.clear_cart(user_id)
                 if not deleted:
                     return {'message': 'Cart is already empty'}, 200
-                message = "All items removed from cart successfully"
+                message = "Cleared"
 
             db.session.commit()
-            return {'message': message}
+            return {'message': message}, 200
 
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            return {'message': f"Database error: {str(e)}"}, 500
         except Exception as e:
             db.session.rollback()
-            abort(500, message=f"An error occurred while removing from cart: {str(e)}")
-
+            return {'message': f"An unexpected error occurred: {str(e)}"}, 500
+        
 class Orders(Resource):
     def __init__(self):
         self.parser = reqparse.RequestParser()

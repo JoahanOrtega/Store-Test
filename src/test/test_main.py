@@ -1,7 +1,8 @@
+from pytest import approx
 import pytest
 from flask import Flask
 from api.extensions import db
-from api.models import UserModel, CategoryModel, ProductModel, CartModel
+from api.models import UserModel, CategoryModel, ProductModel, CartModel, OrderModel, OrderItemModel
 from api.controllers import Users, Categories, Products, Cart
 from flask_restful import Api
 import json
@@ -22,7 +23,7 @@ def app():
     api.add_resource(Users, '/api/users', '/api/users/<int:user_id>')
     api.add_resource(Categories, '/api/categories', '/api/categories/<int:category_id>')
     api.add_resource(Products, '/api/products', '/api/products/<int:product_id>')
-    api.add_resource(Cart, '/api/cart', '/api/cart/<int:user_id>')
+    api.add_resource(Cart, '/api/cart', '/api/cart/<int:user_id>', '/api/cart/<int:user_id>/<int:product_id>')
 
     
     return app
@@ -83,7 +84,7 @@ def init_database(app):
         
         create_test_product("Smartphone", 699.99, "Latest model smartphone", 50, 1)
         create_test_product("Laptop", 1499.99, "Latest model laptop", 25, 1)
-        create_test_product("Smartwatch", 1499.99, "Latest model smartwatch", 5, 1)
+        create_test_product("Headphones", 1499.99, "Wireless headphones", 5, 1)
 
         create_test_cart(2, 1, 2)
         create_test_cart(2, 2, 1)
@@ -429,7 +430,7 @@ def test_get_single_category(client, init_database):
             },
             {
                 'id': 3,
-                'name': 'Smartwatch',
+                'name': 'Headphones',
                 'price': 1499.99,
             },
         ],
@@ -534,9 +535,9 @@ def test_get_all_products(client, init_database):
             },
             {
                 "id": 3,
-                "name": "Smartwatch",
+                "name": "Headphones",
                 "price": 1499.99,
-                "description": "Latest model smartwatch",
+                "description": "Wireless headphones",
                 "stock": 5
             },
         ]
@@ -745,4 +746,228 @@ def test_delete_product_success(client, init_database):
     
     assert response.status_code == 200
     assert response.json == {"message": "Product deleted successfully"}
+
+# CART Test
+def test_get_empty_cart(client, init_database):
+    """Test getting an empty cart"""
+    response = client.get('/api/cart/1')
+    
+    assert response.status_code == 200
+    data = response.json
+    assert data['user_id'] == 1
+    assert data['items'] == []
+    assert data['total'] == 0
+    assert data['item_count'] == 0
+    assert 'updated_at' in data
+
+def test_get_nonexistent_user_cart(client, init_database):
+    """Test getting cart for non-existent user"""
+    response = client.get('/api/cart/999')
+    
+    assert response.status_code == 404
+    assert 'User with id 999 not found' in response.json['message']
+
+def test_add_item_to_cart(client, init_database):
+    """Test adding an item to cart"""
+    response = client.post('/api/cart/1', json={
+        'product_id': 1,
+        'quantity': 2
+    })
+    
+    assert response.status_code == 201
+    data = response.json
+    assert data['message'] == 'Item added to cart successfully'
+    assert data['cart_item']['product_id'] == 1
+    assert data['cart_item']['quantity'] == 2
+    assert data['cart_item']['product_name'] == 'Smartphone'
+    assert 'subtotal' in data['cart_item']
+    assert 'added_at' in data['cart_item']
+
+def test_add_out_of_stock_item(client, init_database):
+    """Test adding out of stock item"""
+    response = client.post('/api/cart/1', json={
+        'product_id': 3,  # Smarwatch (stock: 5)
+        'quantity': 6
+    })
+    assert response.status_code == 400
+
+def test_add_nonexistent_product(client, init_database):
+    """Test adding non-existent product"""
+    response = client.post('/api/cart/1', json={
+        'product_id': 999,
+        'quantity': 1
+    })
+    
+    assert response.status_code == 404
+    assert 'Product with id 999 not found' in response.json['message']
+
+def test_add_negative_quantity(client, init_database):
+    """Test adding negative quantity to cart"""
+    response = client.post('/api/cart/1', json={
+        'product_id': 1,
+        'quantity': -1
+    })
+    
+    assert response.status_code == 400
+    assert 'quantity' in response.json['message'].lower()
+
+def test_add_zero_quantity(client, init_database):
+    """Test adding zero quantity to cart"""
+    response = client.post('/api/cart/1', json={
+        'product_id': 1,
+        'quantity': 0
+    })
+    
+    assert response.status_code == 400
+    assert 'quantity' in response.json['message'].lower()
+
+def test_update_cart_quantity(client, init_database):
+    """Test updating item quantity in cart"""
+    # First add item to cart
+    client.post('/api/cart/1', json={
+        'product_id': 1,
+        'quantity': 1
+    })
+    
+    # Then update quantity
+    response = client.post('/api/cart/1', json={
+        'product_id': 1,
+        'quantity': 2,
+        'replace': True
+    })
+    
+    assert response.status_code == 200
+    data = response.json
+    assert data['cart_item']['quantity'] == 2
+
+def test_exceed_stock_quantity(client, init_database):
+    """Test adding more items than available stock"""
+    response = client.post('/api/cart/1', json={
+        'product_id': 3,  # Laptop (stock: 5)
+        'quantity': 6
+    })
+    
+    assert response.status_code == 400
+    assert 'stock' in response.json['message'].lower()
+
+def test_delete_cart_item(client, init_database):
+    """Test deleting an item from cart"""
+    # Add item to cart
+    client.post('/api/cart/1', json={
+        'product_id': 3,
+        'quantity': 1
+    })
+    
+    # Get the cart to find the cart_item_id
+    cart_response = client.get('/api/cart/1')
+    cart_item_id = cart_response.json['items'][0]['id']
+
+    # Delete item using cart_item_id
+    response = client.delete(f'/api/cart/1/{cart_item_id}')
+    print(response.json)
+    assert response.status_code == 200
+    assert 'removed' in response.json['message'].lower()
+    
+    # Verify item was deleted
+    response = client.get('/api/cart/1')
+    assert len(response.json['items']) == 0
+
+def test_clear_cart(client, init_database):
+    """Test clearing entire cart"""
+    # Add multiple items to cart
+    client.post('/api/cart/1', json={'product_id': 1, 'quantity': 1})
+    client.post('/api/cart/1', json={'product_id': 2, 'quantity': 1})
+    
+    # Clear cart
+    response = client.delete('/api/cart/1')
+    
+    assert response.status_code == 200
+    assert 'cleared' in response.json['message'].lower()
+    
+    # Verify cart is empty
+    response = client.get('/api/cart/1')
+    assert len(response.json['items']) == 0
+
+def test_get_cart_with_multiple_items(client, init_database):
+    """Test getting cart with multiple items"""
+    # Add multiple items
+    client.post('/api/cart/1', json={'product_id': 1, 'quantity': 2})
+    client.post('/api/cart/1', json={'product_id': 2, 'quantity': 1})
+    
+    response = client.get('/api/cart/1')
+    total = (699.99 * 2 + 1499.99)
+
+    assert response.status_code == 200
+    data = response.json
+    assert len(data['items']) == 2
+    assert data['total'] == approx(total)
+    assert data['item_count'] == 2
+
+def test_delete_nonexistent_cart_item(client, init_database):
+    """Test deleting a non-existent cart item"""
+    # First ensure user exists
+    response = client.delete('/api/cart/1/999')
+    
+    assert response.status_code == 404
+    assert response.json['message'] == "Item not found in cart"
+
+def test_delete_cart_item_wrong_user(client, init_database):
+    """Test deleting a cart item from wrong user"""
+    # Add item to cart for user 1
+    add_response = client.post('/api/cart/1', json={
+        'product_id': 1,
+        'quantity': 1
+    })
+    assert add_response.status_code == 201
+    
+    # Get the cart_item_id
+    cart_response = client.get('/api/cart/1')
+    assert cart_response.status_code == 200
+    cart_item_id = cart_response.json['items'][0]['id']
+    
+    # Try to delete item using wrong user_id
+    response = client.delete(f'/api/cart/999/{cart_item_id}')
+    
+    assert response.status_code == 404
+    assert response.json['message'] == "User with id 999 not found"
+
+def test_delete_cart_item_wrong_user_and_item(client, init_database):
+    """Test deleting with both wrong user and item"""
+    response = client.delete('/api/cart/999/999')
+    
+    assert response.status_code == 404
+    assert response.json['message'] == "User with id 999 not found"
+
+def test_clear_empty_cart(client, init_database):
+    """Test clearing an already empty cart"""
+    response = client.delete('/api/cart/1')
+    
+    assert response.status_code == 200
+    assert response.json['message'] == "Cart is already empty"
+
+def test_clear_cart_with_items(client, init_database):
+    """Test clearing a cart with items"""
+    # Add items to cart
+    client.post('/api/cart/1', json={'product_id': 1, 'quantity': 1})
+    client.post('/api/cart/1', json={'product_id': 2, 'quantity': 1})
+    
+    # Verify items were added
+    cart_response = client.get('/api/cart/1')
+    assert len(cart_response.json['items']) == 2
+    
+    # Clear cart
+    response = client.delete('/api/cart/1')
+    
+    assert response.status_code == 200
+    assert response.json['message'] == "Cleared"
+    
+    # Verify cart is empty
+    verify_response = client.get('/api/cart/1')
+    assert len(verify_response.json['items']) == 0
+
+def test_delete_cart_item_invalid_ids(client, init_database):
+    """Test deleting with invalid ID formats"""
+    response = client.delete('/api/cart/abc/def')
+    
+    assert response.status_code == 404  # or whatever your app returns for invalid URLs
 
